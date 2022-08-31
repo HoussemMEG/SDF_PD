@@ -1,0 +1,65 @@
+We suppose that you will have a specific working directory, and you will put all the project files on the same folder
+ that we will name "./" throughout this guide.
+An asterisk "*" is placed in front of procedures that you have to do.
+
+I) Download:
+* Download the data that are present in either:
+	1- Under the ID d001 in:  		http://predict.cs.unm.edu/downloads.php
+	2- Or directly in (if not down):		https://unmm-my.sharepoint.com/personal/jcavanagh_unm_edu/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fjcavanagh%5Funm%5Fedu%2FDocuments%2FPD%20Oddball%20Data&ga=1
+* Once the data are downloaded they should be placed in a sub-folder named <data> on your working directory.
+    /!\ the folders names should be respected as they are case sensitive.
+
+
+II) Folder creation:
+* Create the following folders in the working directory "./":
+    1- EEGLAB
+    2- generated SDF
+    3- generated SDF backup
+    4- figures
+    5- test memory
+* Create two folders inside the folder "./data" named:
+    1- info
+    2- processed
+* Inside the folder "./data/info" place the file that you can find from git: <subject_info.json>
+After these steps you should have the following directory tree:
+
+./ (working directory)
+├── all code (*.py)
+|
+├── EEGLAB
+├── extracted features
+├── generated features
+├── generated features backup
+├── figures
+└── data
+    ├── processed
+    ├── info
+    |   └── subject_info.json
+    |
+    ├── 804_1_PDDys_ODDBALL.mat
+    ├── 804_2_PDDys_ODDBALL.mat
+    |            .
+    |            .
+    |            .
+    └── 8070_1_PDDys_ODDBALL.mat
+
+
+III) EEG-lab download:
+Since we already analysed the ICAs during my internship using EEG-lab and the ICs are already calculated by James
+ Cavanagh's team plus we already identified those containing ocular activity we kept this part using MATLAB to not redo
+ the work. Thus, it is mandatory for this part to remove the ICs containing ocular activity using EEG-lab version 14.
+    - If you want to redo the ICA analysis, you can skip this step and "Step 2 - ICA removal and preparation" however
+      there is some modifications to do, see what "Step 2 - ICA removal and preparation" for more details
+      (mainly you have to be careful about this part "find(tx==t_min+450);  ST_t2 = find(tx==t_max+450); % indexes for
+      Std & Target stimuli" since there is a shift due to some delay). It is preferable to follow the script.
+ * Once the files are downloaded they should be decompressed and put in the foldter "./EEGLAB"
+
+IV) Requirements install:
+see file requirements.txt or:
+    matplotlib==3.5.1
+    mne==0.24.1
+    numpy==1.21.5
+    scikit-learn==1.0.2
+    scipy==1.8.0
+    termcolor==1.1.0
+    PyQt5==5.15.6
