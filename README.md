@@ -1,4 +1,5 @@
 # Sparse Dynamical Features generation, application to Parkinson’s Disease diagnosis
+Code provided for replication purposes. The main contribution is the Dynamical Feature Generator (DFG) see **featuregen.py**
 
 ## Citation
 
