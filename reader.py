@@ -128,7 +128,7 @@ class Reader:
             if trials > 1:  # epoched data case
                 bad_epochs = raw['bad_epochs'][0][0].flatten()  # they removed the first column of bad epochs only
                 data = eeg['data'].transpose((2, 0, 1)).astype('double') * self._CAL
-
+                print(data.shape)
                 # n_samples = int((t_max - t_min) * s_rate + 1)
                 n_samples = int(eeg['pnts'])
 

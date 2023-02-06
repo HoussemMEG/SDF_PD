@@ -7,10 +7,15 @@ from typing import Union, List
 import mne
 import mne.preprocessing
 import numpy as np
+import pandas as pd
+import termcolor
 from mne.decoding import UnsupervisedSpatialFilter
 from mne.preprocessing import ICA
 from sklearn.decomposition import PCA
-import termcolor
+from tqdm import tqdm
+from scipy.stats import kurtosis, skew
+from tabulate import tabulate
+from sklearn.model_selection import StratifiedKFold, LeaveOneOut
 
 from plots import Plotter
 
@@ -350,3 +355,247 @@ def features(x: np.ndarray, function, **kwargs):
     for i in range(len(x)):
         res[i] = function(x[i, :], **kwargs)
     return np.array(res)
+
+
+def mean(lst):
+    return sum(lst) / len(lst)
+
+
+def select_data(grouped, stim, feature, pars, channel):
+    pars = float("{:.2f}".format(pars))
+    if len(channel) > 1:
+        if len(feature) > 1:
+            pass
+            data = np.hstack(
+                [grouped.get_group((stim, f, pars))[channel].to_numpy() for f in feature])
+        else:  # k_feat == 1
+            data = grouped.get_group((stim, feature[0], pars))[channel].to_numpy()
+
+    else:  # k_chan == 1
+        if len(feature) > 1:
+            data = np.array(
+                [grouped.get_group((stim, f, pars))[channel[0]].to_numpy() for f in feature]).T
+        else:  # k_feat == 1
+            data = grouped.get_group((stim, feature[0], pars))[channel[0]].to_numpy()[:, np.newaxis]
+    return data
+
+
+def reset_outer_eval(n_subj, parsimony):
+    return {'train': np.zeros((n_subj, len(parsimony))),
+            'validation': np.zeros((n_subj, len(parsimony))),
+            'test': [],
+            'test_category': np.zeros((n_subj,)),
+            'learning': [],
+            'learning_category': [],
+            'selected validation': []}
+
+
+def read_parameters(session, param_files):
+    # Reading the JSON files
+    parameters = {}
+    for file in os.listdir(session):
+        if file in param_files:
+            parameters_path = os.path.join(session, file)
+            with open(parameters_path) as f:
+                parameters.update(json.load(f))
+
+    # Parameters reading
+    model_freq = np.array(parameters['model_freq'])
+    n_freq = parameters['n_freq']
+    n_point = parameters['n_point']
+    n_features = parameters['n_features']
+    pars = parameters['selection'] if parameters['selection'] is not None else parameters.get('selection_alpha', None)
+    data_case = parameters.get('data_case', 'evoked')
+    alpha = parameters['alpha']
+    version = parameters.get('version', 0)
+
+    # Channel reading
+    channels = parameters['channel_picks']  # Used channels
+
+    # Printing
+    print_c('\nSessions: {:}'.format(session.split('\\')[-1]), 'blue', bold=True)
+    print_c(' Data case: ', highlight=data_case)
+    print_c(' Version: ', highlight=str(version))
+    print_c(' Alpha: ', highlight=alpha)
+    print_c(' Channels: ', highlight=channels)
+    print(' Model frequencies: {:}'.format(model_freq))
+    print_c(' N_freq = ', highlight=n_freq)
+    print_c(' N_point = ', highlight=n_point)
+    print_c(' Beta_dim = ', highlight=n_features)
+    print(' Parsimony: {:}\n'.format(np.array(pars)))
+    return parameters
+
+
+def feature_extraction(x):
+    dic = {'my_argmin': np.argmin(x, axis=1) // 40 * 2,
+           'my_mean': np.sum(x[:, 40 * 90:40 * 249], axis=1),
+           'energy': np.sum(x ** 2, axis=1),
+           'count_non_zero': np.count_nonzero(x, axis=1),
+           # 'mean': np.mean(x, axis=1),
+           'max': np.max(x, axis=1),
+           'min': np.min(x, axis=1),
+           'pk-pk': np.max(x, axis=1) - np.min(x, axis=1),
+           # 'argmin': np.argmin(x, axis=1),
+           'argmax': np.argmax(x, axis=1),
+           'argmax-argmin': np.argmax(x, axis=1) - np.argmin(x, axis=1),
+           'sum abs': np.sum(np.abs(x), axis=1),
+           'var': np.var(x, axis=1),
+           'std': np.std(x, axis=1),
+           'kurtosis': kurtosis(x, axis=1),
+           'skew': skew(x, axis=1),
+           'count above mean': np.array([np.count_nonzero(row[np.where(row >= np.mean(np.abs(row)))]) for row in x]),
+           'count below mean': np.array([np.count_nonzero(row[np.where(row <= np.mean(np.abs(row)))]) for row in x]),
+           'max abs': np.max(np.abs(x), axis=1),
+           'argmax abs': np.argmax(np.abs(x), axis=1),
+           }
+
+    for key, value in dic.items():
+        if value.ndim > 1:
+            raise ValueError("Feature {:} not extracted properly, has the dimension {:}".format(key, value.shape))
+        if value.shape != (x.shape[0],):
+            raise ValueError("Feature not corresponding to the right dimensions")
+    return dic
+
+
+@execution_time
+def read_data_(session, use_x0, param):
+    for file in os.listdir(session):
+        if file != "generated_features.json":  # read only json file containing features not parameters
+            continue
+
+        file_path = os.path.join(session, file)
+        with open(file_path) as f:
+            data: dict = json.load(f)
+
+        dic = []
+        for stim in data.keys():
+            for subj, subj_data in tqdm(data[stim].items(), position=0, leave=True):
+                if use_x0:
+                    VMS = np.array(subj_data['x0'])  # pre np array shape: List(n_channels)(n_features, n_path)
+                else:
+                    # subj_feat pre np array shape: List(n_channels)(n_features, n_path)
+                    VMS = decompress(subj_data['features'], n_features=param['n_features'])
+
+                # stim: stim
+                # subject ID: subj
+                category = subj_data['subject_info']['subject_info']['category']
+                category = 0 if category == 'PD' else 1
+                channels = param['channel_picks']
+                if 'VEOG' in channels:
+                    channels.remove('VEOG')
+                parsimony = np.array(param['selection'] if param['selection'] is not None else param.get('selection_alpha', None))
+
+                n_freq = param['n_freq']
+                n_point = param['n_point']
+                n_features = param['n_features']
+
+                # VMS[:, :, pars_idx] shape: (n_channel, n_features, n_path) per subject
+                for i, ch_val in enumerate(VMS):
+                    if ch_val.shape[-1] != len(parsimony):
+                        repeat = len(parsimony) - ch_val.shape[-1]
+                        for _ in range(repeat):
+                            ch_val = np.append(ch_val, ch_val[:, [-1]], axis=1)
+                        VMS[i] = ch_val
+                VMS = np.array(VMS)
+
+                for pars_idx, pars in enumerate(parsimony):
+                    features_dict = feature_extraction(VMS[:, :, pars_idx])
+                    for feature_name, features in features_dict.items():
+                        subj_dict = {'stim': str(stim),
+                                     'subject': str(subj),
+                                     'category': category,
+                                     'parsimony': float("{:.2f}".format(pars)),
+                                     'feature': feature_name}
+                        for ch_idx, channel in enumerate(channels):
+                            subj_dict.update({channel: features[ch_idx]})
+                        dic.append(subj_dict)
+
+        # columns = ['stim', 'subject', 'category', 'pasimony', *param['channel_picks']]
+        data_df = pd.DataFrame(data=dic, index=None)
+        return data_df
+
+
+def smoothing_scores(score, smoothing=True):
+    if not smoothing:
+        return score
+    temp = [(score[i - 1] + 4 * score[i] + score[i + 1]) / 6 for i in range(1, len(score) - 1)]
+    return np.array([(score[0] + score[1]) / 2, *temp, (score[-2] + score[-1]) / 2])
+
+
+def update_table(table, parsimony, outer_memory, highlight_above):
+    for pars_idx, pars in enumerate(parsimony):
+        train_acc_pars = outer_memory['train'][:, pars_idx].mean()
+        val_acc_pars = outer_memory['validation'][:, pars_idx].mean()
+        if outer_memory['train'][:, pars_idx].mean() >= highlight_above:
+            table[0].append('\033[92m{:}\033[0m'.format(int(pars * 100)))
+            table[1].append('\033[92m{:.1f}\033[0m'.format(train_acc_pars))
+            table[2].append('\033[92m{:.1f}\033[0m'.format(val_acc_pars))
+            table[-1].append('\033[92m OK\033[0m')
+        else:
+            table[0].append('{:}'.format(int(pars * 100)))
+            table[1].append('{:.1f}'.format(train_acc_pars))
+            table[2].append('{:.1f}'.format(val_acc_pars))
+            table[-1].append('-')
+
+
+def prints(i, j, k, stim, select_stim, channel, select_channel, feature, select_feature, table, outer_mem, timed, highlight_above):
+    print_c('Stimuli: {:}     <{:}/{:}>'.format(stim, i + 1, len(select_stim)), 'yellow', bold=True)
+    print_c('\tChannel: {:}   <{:}/{:}>'.format(" / ".join(list(channel)), j + 1, len(select_channel)), 'magenta', bold=True)
+    print_c('\t\tFeature: {:<20}     <{:}/{:}>\t\t{:.1f}s/it'.format(" / ".join(list(feature)), k + 1, len(select_feature), timed), 'blue', bold=True)
+    print(tabulate(table, headers='firstrow', tablefmt="rounded_outline"))
+
+    learning = "\t\t Learning: {:.1f} %".format(mean(outer_mem['learning']))
+    if mean(outer_mem['learning']) > highlight_above:
+        learning = "\t\t\033[92m Learning: {:.1f} %\033[0m".format(mean(outer_mem['learning']))
+
+    validation = "\t\t Validation: {:.1f} %".format(mean(outer_mem['selected validation']))
+    if mean(outer_mem['selected validation']) > highlight_above:
+        validation = "\t\t\033[92m Validation: {:.1f} %\033[0m".format(mean(outer_mem['selected validation']))
+
+    testing = "\t\t Test: {:.1f} %\033[0m".format(mean(outer_mem['test']))
+    if mean(outer_mem['test']) > highlight_above:
+        testing = "\t\t\033[92m Test: {:.1f} %\033[0m".format(mean(outer_mem['test']))
+
+    print('\t\tAccuracy: {:.1f} % ± {:.2f} %'.format(outer_mem['train'].mean(), outer_mem['train'].std()),
+          learning, validation, testing, '\n')
+
+
+def update_experience_values(experience_values, outer_memory, channel, stim):
+    selection_validation = mean(outer_memory['selected validation'])
+    if selection_validation > min(experience_values['validation_acc'][:]):
+        i_min = np.argmin(experience_values['validation_acc'])
+        experience_values['validation_acc'][i_min] = selection_validation
+        experience_values['learning_category'][i_min] = np.array(outer_memory['learning_category'])
+        experience_values['predicted_category'][i_min] = outer_memory['test_category']
+        if selection_validation >= max(experience_values['validation_acc']):
+            experience_values['channel'] = channel
+            experience_values['stim'] = stim
+            experience_values['test'] = mean(outer_memory['test'])
+
+
+def read_data(session, path_session, read_only, param, never_use):
+    file = os.path.join('extracted features', session + '.csv')
+    if read_only:
+        if os.path.exists(file):
+            data_df = pd.read_csv(file, index_col=[0])
+        else:
+            print_c('File not found, reading_only has been set to <False>\n', 'red', bold=True)
+    else:
+        data_df = read_data_(path_session, use_x0=False, param=param)
+        data_df.to_csv(file)
+        print_c('File saved at {:}'.format(file), bold=True)
+
+    data_df.replace(np.nan, 0, inplace=True)
+    data_df.drop(data_df[data_df['subject'].isin(never_use)].index, inplace=True)  # remove outlier / test subjects
+    data_df.reset_index(inplace=True)
+    return data_df
+
+
+def CV_choice(split, shuffle=False):
+    if split == 'LOO':
+        return LeaveOneOut()
+    return StratifiedKFold(n_splits=split, shuffle=shuffle)
+
+
+def list_not_contain_empty(the_list):
+    return any(map(list_not_contain_empty, the_list)) if isinstance(the_list, list) else False
