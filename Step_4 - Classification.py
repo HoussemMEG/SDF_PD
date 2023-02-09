@@ -70,6 +70,7 @@ fold_validation = CV_choice(validation_split)
 test_p_value, test_val, learning_val, validation_val, vote_test_val, vote_learning_val = [], [], [], [], [], []
 
 
+print('\n\nClassification started please wait')
 for _ in range(n_repeat):
     y = category
     if do_permutation_test:
