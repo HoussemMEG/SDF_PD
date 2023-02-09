@@ -579,12 +579,12 @@ def read_data(session, path_session, read_only, param, never_use):
         if os.path.exists(file):
             data_df = pd.read_csv(file, index_col=[0])
         else:
-            print_c('File not found, reading_only has been set to <False>\n', 'red', bold=True)
-    else:
+            print_c('File not found, read_only has been set to <False>\n', 'red', bold=True)
+            read_only = False
+    if not read_only:
         data_df = read_data_(path_session, use_x0=False, param=param)
         data_df.to_csv(file)
         print_c('File saved at {:}'.format(file), bold=True)
-
     data_df.replace(np.nan, 0, inplace=True)
     data_df.drop(data_df[data_df['subject'].isin(never_use)].index, inplace=True)  # remove outlier / test subjects
     data_df.reset_index(inplace=True)
