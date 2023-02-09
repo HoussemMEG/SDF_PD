@@ -41,7 +41,7 @@ clf = LinearDiscriminantAnalysis(solver='svd', shrinkage=None, priors=None, cova
 
 
 # read and set parameters
-path = r"./generated features"
+path = r"./generated SDF"
 param_files = ['DFG_parameters.json', 'preprocessing_parameters.json']
 session = os.listdir(path)[0]
 # session = ['2022-03-02 18;00'][0]  # if you redo many sessions you should probably use this instead of the above
