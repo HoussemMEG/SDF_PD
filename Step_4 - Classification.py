@@ -24,7 +24,7 @@ k_chan = 1
 # Selection
 select_stim = [None, ['target'], ['novel'], ['standard']][0]
 select_channel = [None, [['CP1']], [['CPz']], [['CP2']], [['CPz'], ['CP1'], ['CP2']]][0]
-select_feature = [None, [['argmin']], [['my_mean', 'my_argmin']]][0]
+select_feature = [None, [['mean']], [['my_mean', 'my_argmin']]][-1]
 
 
 never_use = []
